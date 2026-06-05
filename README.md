@@ -1,4 +1,4 @@
-# Домашнее задание к занятию 1 «Disaster recovery и Keepalived»
+# Домашнее задание к занятию 1 «Disaster recovery и Keepalived» - `Анастасиев Дмитрий`
 
 ### Цель задания
 В результате выполнения этого задания вы научитесь:
@@ -42,6 +42,14 @@
 - Для проверки корректности настройки, разорвите один из кабелей между одним из маршрутизаторов и Switch0 и запустите ping между PC0 и Server0.
 - Отправьте получившуюся схему в формате pkt и скриншот, где виден процесс настройки маршрутизатора.
 
+### Решение 1
+
+[Схема в формате pkt](/hsrp_advanced_new.pkt)
+
+![](/img/Screenshot_router1.png)
+
+![](/img/Screenshot_router2.png)
+
 ------
 
 
@@ -52,13 +60,99 @@
 - Настройте Keepalived так, чтобы он запускал данный скрипт каждые 3 секунды и переносил виртуальный IP на другой сервер, если bash-скрипт завершался с кодом, отличным от нуля (то есть порт веб-сервера был недоступен или отсутствовал index.html). Используйте для этого секцию vrrp_script
 - Отправьте получившейся bash-скрипт и конфигурационный файл keepalived, а также скриншот с демонстрацией переезда плавающего ip на другой сервер в случае недоступности порта или файла index.html
 
+### Решение 2
 
+#### Bash-скрипт: /usr/local/bin/nginx_check.sh
+```bash
+#!/bin/bash
+
+PORT=80
+FILE="/var/www/html/index.nginx-debian.html"
+
+if ! timeout 2 bash -c "echo > /dev/tcp/localhost/$PORT" 2>/dev/null
+then
+    exit 1
+fi
+
+if [ ! -f "$FILE" ]
+then
+    exit 1
+fi
+
+exit 0
+```
+
+#### Файл MASTER сервера 192.168.1.15: /etc/keepalived/keepalived.conf
+```
+global_defs {
+    enable_script_security
+}
+
+vrrp_script nginx_check {
+    script "/usr/local/bin/nginx_check.sh"
+    interval 3
+    weight -20
+}
+
+vrrp_instance MY_WEB {
+    state MASTER
+    interface enp0s3
+    virtual_router_id 111
+    priority 250
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 12345678
+    }
+    virtual_ipaddress {
+        192.168.1.111/24
+    }
+    track_script {
+        nginx_check
+    }
+}
+```
+#### Файл BACKUP сервера 192.168.1.14: /etc/keepalived/keepalived.conf
+```
+global_defs {
+    enable_script_security
+}
+
+vrrp_script nginx_check {
+    script "/usr/local/bin/nginx_check.sh"
+    interval 3
+    weight -20
+}
+
+vrrp_instance MY_WEB {
+    state BACKUP
+    interface enp0s3
+    virtual_router_id 111
+    priority 240
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 12345678
+    }
+    virtual_ipaddress {
+        192.168.1.111/24
+    }
+    track_script {
+        nginx_check
+    }
+}
+```
 ------
+
+![Переключение на резервный сервер при падении веб-сервера](/img/Screenshot_switch_no_http.png)
+
+![Переключение на резервный сервер при отсутствии страницы](/img/Screenshot_switch_no_html.png)
+
 
 ## Дополнительные задания со звёздочкой*
 
 Эти задания дополнительные. Их можно не выполнять. На зачёт это не повлияет. Вы можете их выполнить, если хотите глубже разобраться в материале.
- 
+
 ### Задание 3*
 - Изучите дополнительно возможность Keepalived, которая называется vrrp_track_file
 - Напишите bash-скрипт, который будет менять приоритет внутри файла в зависимости от нагрузки на виртуальную машину (можно разместить данный скрипт в cron и запускать каждую минуту). Рассчитывать приоритет можно, например, на основании Load average.
@@ -67,6 +161,62 @@
 - Попробуйте выполнить настройку keepalived на третьем сервере и скорректировать при необходимости формулу так, чтобы плавающий ip адрес всегда был прикреплен к серверу, имеющему наименьшую нагрузку.
 - Отправьте получившийся bash-скрипт и конфигурационный файл keepalived, а также скриншоты логов keepalived с серверов при разных нагрузках
 
+
+### Решение 3
+
+Скрипт /usr/local/bin/priority-calc.sh
+```bash
+!/bin/bash
+
+TRACK_FILE="/etc/keepalived/priority"
+
+CPU=$(nproc)
+
+CPU_NUM=$(printf "%.2f" $CPU)
+
+LOAD_AVG=$(uptime | grep -o "load average:.*" | awk '{print $4}' | tr -d ',')
+
+LOAD_AVG_NUM=$(printf "%.2f" $LOAD_AVG)
+
+if [ 1 -eq "$(echo "$LOAD_AVG_NUM == 0" | bc)" ]
+then
+    PRIORITY=100
+else
+    PRIORITY=$(awk "BEGIN {printf \"%u\", $CPU_NUM/$LOAD_AVG_NUM+1}")
+fi
+
+echo $PRIORITY > $TRACK_FILE
+```
+
+Файл конфигурации /etc/keepalived/keepalived.conf
+```
+global_defs {
+    enable_script_security
+}
+
+track_file track_app_file {
+    file "/etc/keepalived/priority"
+    init_file 10
+}
+
+vrrp_instance MY_WEB {
+    state BACKUP
+    interface enp0s3
+    virtual_router_id 111
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 12345678
+    }
+    virtual_ipaddress {
+        192.168.1.111/24
+    }
+    track_file {
+        track_app_file
+    }
+}
+```
+![](/img/Screenshot_SwitchToMinLoadAverage.png)
 
 ------
 
